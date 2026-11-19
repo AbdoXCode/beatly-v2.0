@@ -24,10 +24,9 @@
       justify-content: center;
       align-items: center;
       background: #0A0A0C;
-      cursor: pointer;
     }
     /* 9:16 vertical crop: 100vh height, 177.78vh width for 16:9 widescreen video */
-    #yt-player {
+    #yt-player, iframe {
       position: absolute;
       top: 50%;
       left: 50%;
@@ -36,6 +35,7 @@
       min-width: 100vw;
       transform: translate(-50%, -50%);
       border: none;
+      pointer-events: none;
       background: #0A0A0C;
     }
     video {
@@ -47,37 +47,31 @@
       object-fit: cover;
       object-position: center;
       background: #0A0A0C;
-    }
-    #tap-hint {
-      display: none;
-      position: absolute;
-      bottom: 40px;
-      left: 50%;
-      transform: translateX(-50%);
-      color: rgba(255, 255, 255, 0.7);
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      font-size: 14px;
       pointer-events: none;
-      z-index: 99;
     }
   </style>
 </head>
 <body>
-  <div id="wrapper"></div>
-  <div id="tap-hint">Tap anywhere to unmute / play</div>
+  <div id="wrapper">
+    <div id="yt-player"></div>
+  </div>
+  <script src="https://www.youtube.com/iframe_api"></script>
   <script>
     var params = new URLSearchParams(window.location.search);
-    var videoId = params.get('v') || 'kJQP7kiw5Fk';
+    var videoId = params.get('v') || 'hX9S94XsySk';
     var directSrc = params.get('src');
     var start = parseFloat(params.get('t')) || 0;
+    var duration = parseFloat(params.get('d')) || 30;
     var isMuted = params.get('mute') === '1' ? 1 : 0;
     var showControls = params.get('controls') === '1' ? 1 : 0;
     var wrapper = document.getElementById('wrapper');
-    var tapHint = document.getElementById('tap-hint');
-    var iframe = null;
+    var ytPlayerDiv = document.getElementById('yt-player');
+    var player = null;
+    var loopTimer = null;
     var video = null;
 
     if (directSrc) {
+      if (ytPlayerDiv) ytPlayerDiv.style.display = 'none';
       video = document.createElement('video');
       video.src = directSrc;
       video.autoplay = true;
@@ -88,35 +82,84 @@
       video.setAttribute('playsinline', 'true');
       if (start > 0) video.currentTime = start;
       wrapper.appendChild(video);
-      video.play().catch(function() {
-        if (tapHint) tapHint.style.display = 'block';
-      });
-    } else if (videoId) {
-      iframe = document.createElement('iframe');
-      iframe.id = 'yt-player';
-      iframe.allow = 'autoplay; encrypted-media; picture-in-picture';
-      iframe.referrerPolicy = 'strict-origin-when-cross-origin';
-      iframe.setAttribute('playsinline', '1');
-      var embedUrl = 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(videoId) +
-        '?autoplay=1&mute=' + isMuted + '&controls=' + showControls + '&loop=1&playlist=' + encodeURIComponent(videoId) +
-        '&playsinline=1&rel=0&fs=0&iv_load_policy=3&disablekb=1&enablejsapi=1' +
-        (start > 0 ? '&start=' + Math.floor(start) : '');
-      iframe.src = embedUrl;
-      wrapper.appendChild(iframe);
-    }
+      video.play().catch(function() {});
+    } else {
+      function startLoopChecker() {
+        if (loopTimer) clearInterval(loopTimer);
+        if (duration > 0 && start > 0) {
+          loopTimer = setInterval(function() {
+            if (player && typeof player.getCurrentTime === 'function') {
+              var cur = player.getCurrentTime();
+              if (cur >= start + duration || cur < start - 2) {
+                player.seekTo(start, true);
+              }
+            }
+          }, 500);
+        }
+      }
 
-    // Allow user tap anywhere to play/unmute in desktop/mobile web browsers
-    document.addEventListener('click', function() {
-      if (tapHint) tapHint.style.display = 'none';
-      if (video) {
-        video.muted = false;
-        video.play().catch(function() {});
+      function initYouTube() {
+        if (player) return;
+        if (window.YT && window.YT.Player) {
+          player = new YT.Player('yt-player', {
+            videoId: videoId,
+            playerVars: {
+              autoplay: 1,
+              mute: isMuted,
+              controls: showControls,
+              playsinline: 1,
+              rel: 0,
+              fs: 0,
+              iv_load_policy: 3,
+              disablekb: 1,
+              start: Math.floor(start),
+              origin: window.location.origin
+            },
+            events: {
+              onReady: function(e) {
+                if (start > 0) {
+                  e.target.seekTo(start, true);
+                }
+                e.target.playVideo();
+                startLoopChecker();
+              },
+              onStateChange: function(e) {
+                if (e.data === YT.PlayerState.ENDED) {
+                  if (start > 0) {
+                    e.target.seekTo(start, true);
+                  } else {
+                    e.target.seekTo(0, true);
+                  }
+                  e.target.playVideo();
+                }
+              }
+            }
+          });
+        } else {
+          var iframe = document.createElement('iframe');
+          iframe.id = 'yt-player-iframe';
+          iframe.allow = 'autoplay; encrypted-media; picture-in-picture';
+          iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+          iframe.setAttribute('playsinline', '1');
+          var embedUrl = 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(videoId) +
+            '?autoplay=1&mute=' + isMuted + '&controls=' + showControls +
+            '&playsinline=1&rel=0&fs=0&iv_load_policy=3&disablekb=1&enablejsapi=1' +
+            (start > 0 ? '&start=' + Math.floor(start) : '');
+          iframe.src = embedUrl;
+          wrapper.appendChild(iframe);
+          if (ytPlayerDiv) ytPlayerDiv.style.display = 'none';
+        }
       }
-      if (iframe && iframe.contentWindow) {
-        iframe.contentWindow.postMessage('{"event":"command","func":"unMute","args":""}', '*');
-        iframe.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
+
+      if (window.YT && window.YT.Player) {
+        initYouTube();
+      } else {
+        window.onYouTubeIframeAPIReady = initYouTube;
+        setTimeout(function() {
+          if (!player) initYouTube();
+        }, 1200);
       }
-    });
+    }
 
     window.addEventListener('message', function(e) {
       var msg = e.data;
@@ -130,11 +173,20 @@
         if (isPause && !video.paused) video.pause();
         if (isPlay && video.paused) video.play().catch(function() {});
       }
-      if (iframe && iframe.contentWindow) {
+      if (player && typeof player.pauseVideo === 'function') {
         if (isPause) {
-          iframe.contentWindow.postMessage('{"event":"command","func":"pauseVideo","args":""}', '*');
+          player.pauseVideo();
         } else if (isPlay) {
-          iframe.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
+          player.playVideo();
+        }
+      } else {
+        var fallbackIframe = document.getElementById('yt-player-iframe') || document.querySelector('iframe');
+        if (fallbackIframe && fallbackIframe.contentWindow) {
+          if (isPause) {
+            fallbackIframe.contentWindow.postMessage('{"event":"command","func":"pauseVideo","args":""}', '*');
+          } else if (isPlay) {
+            fallbackIframe.contentWindow.postMessage('{"event":"command","func":"playVideo","args":""}', '*');
+          }
         }
       }
     });
